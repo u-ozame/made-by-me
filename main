@@ -1,0 +1,148 @@
+import sys
+from datetime import datetime
+
+def main(lines=None):
+    
+    input_data = sys.stdin.read().split()
+    if not input_data:
+        return
+
+    idx = 0
+
+    N = int(input_data[idx])
+    M = int(input_data[idx +1])
+    D = int(input_data[idx + 2])
+    idx += 3
+
+    A = input_data[idx : idx + N]
+    idx += N
+
+    H = [int(x) for x in input_data[idx : idx + 7]]
+    idx += 7
+
+    Q = int(input_data[idx])
+    idx += 1
+    #table
+    shipment_counts = {}
+    orders_db = {}
+    shipment_orders = {}
+
+    for _ in range(Q):
+        if idx >= len(input_data):
+            break
+
+        query_type = input_data[idx]
+        idx += 1
+
+        if query_type == "ORDER":
+            T = input_data[idx]
+            order_id = input_data[idx + 1]
+            ship_date = input_data[idx + 2]
+            K = int(input_data[idx + 3])
+            idx += 4
+
+            order_items = []
+            is_exceeded = False
+            dt = datetime.strptime(ship_date, "%Y-%m-%d")
+            weekday = dt.weekday()
+            for _ in range(K):
+                item_id = input_data[idx]
+                quantity =int(input_data[idx + 1])
+                idx += 2
+                order_items.append((item_id, quantity))
+                current_item_count = shipment_counts.get((ship_date, item_id), 0)
+                if H[weekday] == 0 or current_item_count + quantity > M:
+                    is_exceeded = True
+            if is_exceeded:
+                      print(
+                    f"{T} Ordered {order_id} Error: the number of available shipments has been exceeded."
+                )
+            else:
+                for item_id, quantity in order_items:
+                    shipment_counts[(ship_date, item_id)] = (
+                        shipment_counts.get((ship_date, item_id), 0) + quantity
+                    )    
+             #check
+                orders_db[order_id] = {
+                    "ship_date": ship_date,
+                    "items": order_items,
+                    "status": "ORDERED",
+                }
+                print(f"{T} Ordered {order_id}")
+            """
+            current_shipments = shipment_counts.get(ship_date, 0)
+            if current_shipments + 1 > M :
+                print(
+                    f"{T} Ordered {order_id} Error: the number of available shipments has been exceeded."
+                )
+            else:
+                  shipment_counts[ship_date] = current_shipments + 1 #total_quantity
+                  if ship_date not in shipment_orders:
+                        shipment_orders[ship_date] = []
+                  shipment_orders[ship_date].append(order_id)
+                  
+                  orders_db[order_id] = {
+                    "ship_date": ship_date,
+                    "quantity": total_quantity,
+                    "status":"ORDERED",
+                  }
+                  print(f"{T} Ordered {order_id}")
+            
+            #if current_shipments +1 > M:
+                print(
+                f"{T} Ordered {order_id} Error: the number of available shipments has been exceeded."
+                )
+            #else:
+                #shipment_counts[ship_date] = current_shipments + 1
+            """
+
+        elif query_type == "SHIP":
+            ship_time = input_data[idx]
+            idx += 1
+            # todo
+            target_date = ship_time.split("T")[0]
+            shipped_list = []
+            shipped_quantity = 0
+
+            #if target_date in shipment_orders:
+            for oid, info in orders_db.items():
+                if info["ship_date"] == target_date and info["status"] == "ORDERED" :
+                    shipped_list.append(oid)
+                    info["status"] = "SHIPPED"
+                        #shipped_quantity += orders_db[oid]["quantity"]
+                    for item_id, quantity in info["items"]:
+                        if (target_date, item_id) in shipment_counts:
+                            shift_counts_key = (target_date, item_id)
+                            shipment_counts[shift_counts_key] -= quantity
+            shipped_list.sort()
+
+            print (f"{ship_time} Shipped {len(shipped_list)} Orders")
+
+            if shipped_list:
+                print(" ".join(shipped_list))
+            """    
+            #for oid in shipped_list :
+                #print(oid)
+            """
+
+        elif query_type == "CANCEL":
+            cancel_time = input_data[idx]
+            target_id = input_data[idx + 1]
+            idx += 2
+
+            if(
+                target_id in orders_db
+                and orders_db[target_id]["status"] == "ORDERED"
+            ):
+                s_date = orders_db[target_id]["ship_date"]
+                #q_amt = orders_db[target_id]["quantity"]
+
+                for item_id, quantity in orders_db[target_id]["items"]:
+                    if (s_date, item_id) in shipment_counts:
+                        shipment_counts[(s_date, item_id)] -= quantity
+
+                orders_db[target_id]["status"] = "CANCELLED"
+                print(f"{cancel_time} Canceled {target_id}")
+
+if __name__ == "__main__":
+    main()        
