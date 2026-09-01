@@ -1,1 +1,156 @@
+import yfinance as yf
+import pandas as pd
+from datetime import datetime
 
+# ==========================================
+# 1. 初期設定・ポートフォリオ構成
+# ==========================================
+# 監視・投資対象リスト（S&P500 ETF + 個別株）
+WATCHLIST = ["VOO", "AAPL", "MSFT", "GOOGL", "NTDOY", "KO"]
+
+# 投資パラメータ
+TARGET_PROFIT_RATE = 0.15  # 利確トリガー（+15%）
+SELL_RATIO = 0.50          # 利確時の売却比率（50%）
+MONTHLY_DEPOSIT = 1000.0   # 毎回の積立原資（$1,000）
+
+class MockPortfolio:
+    def __init__(self, initial_cash=10000.0):
+        self.cash = initial_cash  # 保有現金（USD）
+        # ポートフォリオ: { symbol: {'qty': 株数, 'avg_cost': 平均取得単価} }
+        self.positions = {}
+        self.trade_logs = []
+
+    def get_current_prices(self):
+        """yfinanceを使って最新の株価を一括取得"""
+        print("\n📡 最新の株価データを取得中...")
+        prices = {}
+        for symbol in WATCHLIST:
+            try:
+                ticker = yf.Ticker(symbol)
+                # 直近の終値または現在値を取得
+                hist = ticker.history(period="1d")
+                if not hist.empty:
+                    prices[symbol] = round(float(hist["Close"].iloc[-1]), 2)
+                else:
+                    prices[symbol] = 0.0
+            except Exception as e:
+                print(f"❌ {symbol} のデータ取得失敗: {e}")
+                prices[symbol] = 0.0
+        return prices
+
+    def buy(self, symbol, amount_usd, current_price):
+        """指定金額分を成行購入（端数株対応）"""
+        if current_price <= 0:
+            return
+        
+        shares_to_buy = amount_usd / current_price
+        
+        if self.cash < amount_usd:
+            print(f"⚠️ 現金不足のため購入をスキップ: 残高 ${self.cash:.2f}")
+            return
+
+        self.cash -= amount_usd
+        
+        # 既存ポジションの更新（加重平均取得単価の計算）
+        if symbol in self.positions:
+            old_qty = self.positions[symbol]['qty']
+            old_cost = self.positions[symbol]['avg_cost']
+            new_qty = old_qty + shares_to_buy
+            new_avg_cost = ((old_qty * old_cost) + amount_usd) / new_qty
+            self.positions[symbol] = {'qty': new_qty, 'avg_cost': new_avg_cost}
+        else:
+            self.positions[symbol] = {'qty': shares_to_buy, 'avg_cost': current_price}
+
+        log = f"🛒 [購入] {symbol}: {shares_to_buy:.3f}株 @ ${current_price:.2f} (投入額: ${amount_usd:.2f})"
+        self.trade_logs.append(log)
+        print(log)
+
+    def sell_partial(self, symbol, ratio, current_price):
+        """保有株の一定比率（例: 50%）を売却してキャッシュ化"""
+        pos = self.positions.get(symbol)
+        if not pos or pos['qty'] <= 0:
+            return 0.0
+
+        shares_to_sell = pos['qty'] * ratio
+        cash_gained = shares_to_sell * current_price
+        
+        # ポジションを減らす（平均取得単価は変化しない）
+        pos['qty'] -= shares_to_sell
+        self.cash += cash_gained
+        
+        log = f"🎉 [利確] {symbol}: {shares_to_sell:.3f}株 を売却 @ ${current_price:.2f} ➔ 獲得キャッシュ: ${cash_gained:.2f}"
+        self.trade_logs.append(log)
+        print(log)
+        
+        return cash_gained
+
+    def run_rebalance_and_take_profit(self, current_prices):
+        """+15%達成銘柄を判定し、50%利確 ➔ 他銘柄へ均等再投資"""
+        print("\n--- 🔍 ポートフォリオ評価 & 利確チェック ---")
+        rebalance_candidates = []
+
+        for symbol, pos in self.positions.items():
+            price = current_prices.get(symbol, 0.0)
+            if price <= 0 or pos['qty'] <= 0:
+                continue
+
+            profit_rate = (price - pos['avg_cost']) / pos['avg_cost']
+            current_value = pos['qty'] * price
+            print(f"📊 {symbol:<6} | 保有: {pos['qty']:>7.3f}株 | 取得単価: ${pos['avg_cost']:>7.2f} | 現在値: ${price:>7.2f} | 損益率: {profit_rate:>7.2%}")
+
+            # +15% 以上で利確候補に登録
+            if profit_rate >= TARGET_PROFIT_RATE:
+                rebalance_candidates.append((symbol, profit_rate, price))
+
+        # 利確処理と再投資
+        if rebalance_candidates:
+            # 利益率が最も高い銘柄を特定
+            highest_stock = max(rebalance_candidates, key=lambda x: x[1])
+            target_sym, p_rate, curr_price = highest_stock
+            
+            print(f"\n🔥 【利確トリガー発動】最も上昇している {target_sym} (損益: +{p_rate:.2%}) の {int(SELL_RATIO*100)}% を売却します！")
+            gained_cash = self.sell_partial(target_sym, SELL_RATIO, curr_price)
+            
+            # 再投資先（利確した銘柄以外のリスト）
+            reinvest_targets = [s for s in WATCHLIST if s != target_sym]
+            amount_per_stock = gained_cash / len(reinvest_targets)
+            
+            print(f"🔄 得られた利益キャッシュ (${gained_cash:.2f}) を他の {len(reinvest_targets)} 銘柄へ再投資します（各 ${amount_per_stock:.2f}）")
+            for t_sym in reinvest_targets:
+                self.buy(t_sym, amount_per_stock, current_prices.get(t_sym, 0.0))
+        else:
+            print("\n✨ +15% に到達した銘柄はありません。現在のポジションを維持します。")
+
+# ==========================================
+# 3. 実行シミュレーション（動作デモ）
+# ==========================================
+if __name__ == "__main__":
+    # シミュレータの初期化（初期資金 $10,000）
+    trader = MockPortfolio(initial_cash=10000.0)
+    
+    # リアルタイム価格の取得
+    market_prices = trader.get_current_prices()
+
+    print("\n" + "="*50)
+    print("【Step 1: 定期積立のシミュレーション（全銘柄へ均等積立）】")
+    print("="*50)
+    deposit_per_stock = MONTHLY_DEPOSIT / len(WATCHLIST)
+    for sym in WATCHLIST:
+        trader.buy(sym, deposit_per_stock, market_prices[sym])
+
+    print("\n" + "="*50)
+    print("【Step 2: 擬似的な急騰シナリオ（テスト用）】")
+    print("※ ロジック検証のため、AAPLの価格が意図的に +20% 上昇したと仮定")
+    print("="*50)
+    simulated_prices = market_prices.copy()
+    simulated_prices["AAPL"] = simulated_prices["AAPL"] * 1.20  # +20% 急騰
+
+    # 利確・再投資判定を実行
+    trader.run_rebalance_and_take_profit(simulated_prices)
+
+    print("\n" + "="*50)
+    print("【最終残高 & ポートフォリオ状況】")
+    print("="*50)
+    print(f"💰 現金残高: ${trader.cash:.2f}")
+    for sym, pos in trader.positions.items():
+        print(f"銘柄: {sym:<6} | 残株数: {pos['qty']:.3f}株 | 平均単価: ${pos['avg_cost']:.2f}")
